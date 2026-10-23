@@ -1,7 +1,11 @@
 import { base64UrlToBytes, bytesToBase64Url } from "@/lib/byok/encoding";
 import { encryptSecret, fetchWithByokRetry } from "@/lib/byok/client";
 import { BYOK_CONTEXTS } from "@/lib/byok/shared";
-import { readJsonResponseOrThrow, signedApiFetch } from "@/lib/api/client";
+import {
+  getResponseErrorMessage,
+  readJsonResponseOrThrow,
+  signedApiFetch,
+} from "@/lib/api/client";
 import { decryptLocalSecret } from "@/lib/security/localSecrets";
 import type {
   SyncProviderConfig,
@@ -13,6 +17,31 @@ import type { LocalEncryptedSecretEnvelope } from "@/lib/security/localSecrets";
 
 export const SYNC_REMOTE_LIST_MAX_PAGES = 256;
 export const SYNC_REMOTE_LIST_MAX_OBJECTS = 100_000;
+export const SYNC_REMOTE_MAX_ATTEMPTS = 3;
+export const SYNC_REMOTE_RETRY_DELAY_MS = 500;
+
+// Gateway and platform failures (such as a Worker exceeding its CPU limit)
+// return non-JSON pages. Every proxy operation is idempotent, so retry them.
+const RETRYABLE_SYNC_REMOTE_STATUSES = new Set([502, 503, 504]);
+
+function waitForSyncRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(
+        signal?.reason instanceof Error
+          ? signal.reason
+          : new DOMException("The sync request was aborted.", "AbortError"),
+      );
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+}
 
 export interface SyncRemoteClient {
   test(signal?: AbortSignal): Promise<void>;
@@ -44,7 +73,7 @@ export async function createSyncRemoteClient(
     input: Omit<SyncRemoteRequest, "provider" | "credentialSecret">,
     signal?: AbortSignal,
   ): Promise<SyncRemoteResponse> => {
-    const response = await fetchWithByokRetry(async () => {
+    const send = async () => {
       const encrypted = await encryptSecret(
         credentials,
         BYOK_CONTEXTS.syncRemote,
@@ -61,11 +90,28 @@ export async function createSyncRemoteClient(
         } satisfies SyncRemoteRequest),
         signal,
       });
-    });
-    return readJsonResponseOrThrow<SyncRemoteResponse>(
-      response,
-      "Encrypted sync request failed",
-    );
+    };
+    for (let attempt = 1; ; attempt += 1) {
+      const response = await fetchWithByokRetry(send);
+      if (response.ok) {
+        return readJsonResponseOrThrow<SyncRemoteResponse>(
+          response,
+          "Encrypted sync request failed",
+        );
+      }
+      if (
+        attempt >= SYNC_REMOTE_MAX_ATTEMPTS ||
+        !RETRYABLE_SYNC_REMOTE_STATUSES.has(response.status)
+      ) {
+        throw new Error(
+          await getResponseErrorMessage(
+            response,
+            `Encrypted sync request failed with HTTP ${response.status}.`,
+          ),
+        );
+      }
+      await waitForSyncRetry(SYNC_REMOTE_RETRY_DELAY_MS * attempt, signal);
+    }
   };
 
   const throwIfListAborted = (signal?: AbortSignal): void => {

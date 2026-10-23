@@ -50,6 +50,19 @@ result transactionally, and uploads the current device snapshot. Message
 additions remain reachable as branches. Scalar settings changed concurrently
 are shown under **Settings → Sync** so you can choose the value to keep.
 
+## Server-managed vault
+
+A password-protected deployment can preset one shared vault with the
+`SYNC_PRESET_*` variables (see
+[Environment variables](./environment-variables.md#server-managed-sync-preset)).
+After sign-in, a device that has no sync provider or vault yet configures the
+S3 backend, imports the preset recovery code, and starts syncing. Devices with
+their own backend, or where sync was turned off, are left unchanged.
+
+The server hands the bucket credentials and recovery code to every client that
+passed the access password, so anyone who knows the password can decrypt this
+vault. Use a dedicated bucket with credentials scoped to it.
+
 ## Backend access
 
 The browser sends encrypted content to `POST /api/sync/remote`. Backend
@@ -63,10 +76,12 @@ endpoints are intended for explicit self-hosted deployments.
 
 ## Scheduling and retention
 
-When enabled and online, Neo Chat attempts sync on startup, reconnect, window
-focus, five seconds after local changes settle, and every five minutes while
-the tab is visible. **Sync now** is always available. The Service Worker does
-not run background sync.
+When enabled and online, Neo Chat syncs once, three seconds after a chat
+response finishes. Opening the page, focusing the window, or changing settings
+alone does not start a sync; those changes are included in the next run. A
+device joining the server-managed vault syncs right after sign-in. A response
+that finishes while offline syncs after the browser reconnects. **Sync now** is
+always available. The Service Worker does not run background sync.
 
 While offline, sync setup, backend changes, vault creation or import, key
 rotation, and conflict decisions are unavailable. Disabling sync keeps both
