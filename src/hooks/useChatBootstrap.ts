@@ -195,14 +195,6 @@ export function useChatBootstrap({
         applyCoreServerConfig(config);
         applySettingsServerConfig(config);
         setServerConfigResolved(true);
-        if (config.deployment?.accessPasswordEnabled) {
-          // Signed-in clients join the server-managed sync vault, if any.
-          void import("@/lib/sync/preset")
-            .then(({ applyServerSyncPreset }) => applyServerSyncPreset())
-            .catch((error) =>
-              logChatAppError("Failed to apply the sync preset", error),
-            );
-        }
         if (
           !config.modelProvider.available ||
           config.modelProvider.models.length > 0

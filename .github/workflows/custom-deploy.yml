@@ -1,0 +1,161 @@
+# Fork-only: build the latest upstream neo-chat with this fork's `custom/`
+# overlay and deploy it to Cloudflare Workers. Upstream files are never edited
+# or merged, so upstream updates cannot conflict with the overlay. A failed
+# check or build leaves the live Worker on the last good version, and the next
+# scheduled run retries.
+name: Custom deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even if this upstream + overlay is already live
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 */2 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - "custom/**"
+      - ".github/workflows/custom-deploy.yml"
+
+permissions:
+  # actions: write keeps the schedule alive (see "Keep schedule enabled").
+  actions: write
+  contents: read
+
+concurrency:
+  group: custom-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.repository_owner != 'u14app' }}
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPOSITORY: ${{ vars.UPSTREAM_REPOSITORY || 'u14app/neo-chat' }}
+      UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH || 'main' }}
+
+    steps:
+      - name: Keep schedule enabled
+        # GitHub disables scheduled workflows after 60 days without repository
+        # activity; re-enabling on every run resets that timer.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api -X PUT
+          "repos/${{ github.repository }}/actions/workflows/custom-deploy.yml/enable"
+          || echo "::warning::Could not refresh the workflow schedule."
+
+      - name: Checkout fork overlay
+        uses: actions/checkout@v7
+        with:
+          path: fork
+          sparse-checkout: custom
+
+      - name: Checkout upstream
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ env.UPSTREAM_BRANCH }}
+          path: build
+          persist-credentials: false
+
+      - name: Identify build
+        id: ident
+        run: |
+          set -euo pipefail
+          upstream_sha="$(git -C build rev-parse HEAD)"
+          custom_sha="$(git -C fork rev-parse HEAD:custom)"
+          echo "upstream=${upstream_sha}" >> "$GITHUB_OUTPUT"
+          echo "key=custom-deploy-${upstream_sha}-${custom_sha}" >> "$GITHUB_OUTPUT"
+          echo "Upstream ${UPSTREAM_REPOSITORY}@${upstream_sha}, overlay tree ${custom_sha}."
+
+      - name: Check last deployment
+        id: deployed
+        uses: actions/cache/restore@v4
+        with:
+          path: deployed.txt
+          key: ${{ steps.ident.outputs.key }}
+          lookup-only: true
+
+      - name: Decide
+        id: decide
+        env:
+          CACHE_HIT: ${{ steps.deployed.outputs.cache-hit }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$CACHE_HIT" = "true" ] && [ "$FORCE" != "true" ]; then
+            echo "This upstream + overlay is already live; nothing to do."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply overlay
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        run: |
+          cp -R ../fork/custom custom
+          node custom/apply.mjs
+
+      - name: Set up pnpm
+        if: steps.decide.outputs.run == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: build/package.json
+
+      - name: Set up Node.js
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: build/.node-version
+          cache: pnpm
+          cache-dependency-path: build/pnpm-lock.yaml
+
+      - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        run: pnpm typecheck
+
+      - name: Test
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        # Retries absorb timing-sensitive upstream tests on shared runners.
+        run: pnpm test --retry=2
+
+      - name: Build Worker
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        run: pnpm build:worker
+
+      - name: Deploy Worker
+        id: deploy
+        if: steps.decide.outputs.run == 'true'
+        working-directory: build
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets."
+            exit 1
+          fi
+          # Upstream's script passes --keep-vars, preserving dashboard variables.
+          pnpm deploy:worker
+          echo "${{ steps.ident.outputs.upstream }}" > ../deployed.txt
+
+      - name: Record deployment
+        if: steps.deploy.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: deployed.txt
+          key: ${{ steps.ident.outputs.key }}

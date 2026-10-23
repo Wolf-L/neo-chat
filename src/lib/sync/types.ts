@@ -150,19 +150,6 @@ export interface SyncRemoteResponse {
   contentType?: string;
 }
 
-/**
- * Server-managed sync settings handed to signed-in clients so encrypted sync
- * can be enabled without manual setup. Only offered behind an access password.
- */
-export type SyncServerPreset =
-  | { available: false }
-  | {
-      available: true;
-      provider: Extract<SyncProviderConfig, { kind: "s3" }>;
-      credentials: Extract<SyncProviderCredentials, { kind: "s3" }>;
-      recoveryCode: string;
-    };
-
 export interface PersistedSyncConfiguration {
   enabled: boolean;
   provider?: SyncProviderConfig;

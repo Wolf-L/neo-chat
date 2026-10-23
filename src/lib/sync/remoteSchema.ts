@@ -20,7 +20,7 @@ const WebDavProviderSchema = z
   })
   .strict();
 
-export const S3ProviderSchema = z
+const S3ProviderSchema = z
   .object({
     kind: z.literal("s3"),
     endpoint: z.string().url().max(2_048),

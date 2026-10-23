@@ -6,18 +6,6 @@
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "keep_vars": true,
-  "workers_dev": true,
-  "preview_urls": true,
-  // chat.qqedu.ccwu.cc: Workers Custom Domain on the Cloudflare zone.
-  // chat.metyou.top: Aliyun DNS CNAME to an optimized SaaS hostname, served
-  // via a Cloudflare for SaaS custom hostname on the qqedu.ccwu.cc zone.
-  "routes": [
-    { "pattern": "chat.qqedu.ccwu.cc", "custom_domain": true },
-    {
-      "pattern": "chat.metyou.top/*",
-      "zone_id": "1b6c1d77bee567a671c463b5470ea7d2",
-    },
-  ],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",

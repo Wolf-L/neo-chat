@@ -21,9 +21,11 @@ vi.mock("@/store/core/syncStore", () => ({
 }));
 
 import { generateRecoveryCode } from "@/lib/sync/crypto";
-import { applyServerSyncPreset } from "@/lib/sync/preset";
-import { getServerSyncPreset } from "@/lib/sync/serverPreset";
-import { GET } from "@/app/api/sync/preset/route";
+import { applyServerSyncPreset } from "../overlay/src/lib/sync/customPreset";
+import {
+  GET,
+  getServerSyncPreset,
+} from "../overlay/src/lib/sync/customServerPreset";
 
 const PRESET_ENV = {
   ACCESS_PASSWORD: "secret",
@@ -132,7 +134,7 @@ describe("client sync preset", () => {
 
     await expect(applyServerSyncPreset()).resolves.toBe("applied");
     expect(mocks.signedApiFetch).toHaveBeenCalledWith(
-      "/api/sync/preset",
+      "/api/sync/custom-preset",
       expect.objectContaining({ method: "GET" }),
     );
     expect(configureProvider).toHaveBeenCalledWith(
@@ -140,7 +142,8 @@ describe("client sync preset", () => {
       preset.credentials,
     );
     expect(initializeVault).toHaveBeenCalledWith("code");
-    expect(syncNow).toHaveBeenCalledWith("preset");
+    // The scheduler starts the first sync, not the preset join.
+    expect(syncNow).not.toHaveBeenCalled();
   });
 
   it.each([

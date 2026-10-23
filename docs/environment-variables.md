@@ -51,26 +51,6 @@ Generate copyable BYOK values with:
 corepack pnpm byok:generate
 ```
 
-## Server-managed sync preset
-
-These variables are read only when `ACCESS_PASSWORD` is set. Signed-in
-devices that have no sync setup of their own fetch them from
-`GET /api/sync/preset` and join the shared encrypted vault automatically. See
-[Encrypted sync](./encrypted-sync.md#server-managed-vault).
-
-| Variable                           | Purpose                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------- |
-| `SYNC_PRESET_S3_ENDPOINT`          | S3-compatible endpoint, for example `https://<account-id>.r2.cloudflarestorage.com` for R2. |
-| `SYNC_PRESET_S3_REGION`            | S3 region. Defaults to `auto`.                                                              |
-| `SYNC_PRESET_S3_BUCKET`            | Bucket that stores the encrypted vault.                                                     |
-| `SYNC_PRESET_S3_PREFIX`            | Optional object key prefix.                                                                 |
-| `SYNC_PRESET_S3_FORCE_PATH_STYLE`  | Path-style addressing. Defaults to `true`; set `false` for virtual-hosted style.            |
-| `SYNC_PRESET_S3_ACCESS_KEY_ID`     | Access key for the bucket. Store as a secret.                                               |
-| `SYNC_PRESET_S3_SECRET_ACCESS_KEY` | Secret key for the bucket. Store as a secret.                                               |
-| `SYNC_PRESET_RECOVERY_CODE`        | Vault recovery code (`neo-sync-v1.…`). Store as a secret.                                   |
-
-The preset is offered only when every required value is present and valid.
-
 ## Deployment safety
 
 | Variable                          | Purpose                                                                                                                                                                                     |

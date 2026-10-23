@@ -1,85 +1,75 @@
-import type { Message } from "@/types";
 import { useSyncStore } from "@/store/core/syncStore";
 
-// Sync once shortly after a response finishes instead of on every store
-// change, focus, or timer tick. Opening the page alone never syncs; the
-// server preset join (see `preset.ts`) and **Sync now** cover the rest.
-export const SYNC_AFTER_RESPONSE_DELAY_MS = 3_000;
+const DEBOUNCE_MS = 5_000;
+const FOREGROUND_INTERVAL_MS = 5 * 60_000;
 
 let stopActiveScheduler: (() => void) | undefined;
 
-function hasStreamingMessage(messages: readonly Message[]): boolean {
-  return messages.some((message) => message.generation?.status === "streaming");
+function canRun(): boolean {
+  return (
+    typeof document === "undefined" || document.visibilityState === "visible"
+  );
 }
 
 export function startEncryptedSyncScheduler(): () => void {
   if (typeof window === "undefined") return () => undefined;
   if (stopActiveScheduler) return stopActiveScheduler;
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
-  // A finished response whose sync has not started yet (for example while
-  // offline or while another sync was running).
-  let pending = false;
-
-  const clearTimer = () => {
-    if (timer) clearTimeout(timer);
-    timer = undefined;
-  };
   const run = () => {
-    timer = undefined;
-    if (disposed || !pending) return;
+    if (disposed || !canRun()) return;
     const state = useSyncStore.getState();
-    if (!state.hydrated || !state.enabled) {
-      pending = false;
-      return;
-    }
-    if (!navigator.onLine) return;
-    if (state.status === "syncing") {
-      schedule();
-      return;
-    }
-    pending = false;
-    void state.syncNow("response").catch(() => undefined);
+    if (!state.hydrated || !state.enabled || state.status === "syncing") return;
+    void state.syncNow("scheduled").catch(() => undefined);
   };
   const schedule = () => {
     if (disposed) return;
-    pending = true;
-    clearTimer();
-    timer = setTimeout(run, SYNC_AFTER_RESPONSE_DELAY_MS);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(run, DEBOUNCE_MS);
   };
-  const onOnline = () => {
-    if (pending) {
-      schedule();
-    } else if (useSyncStore.getState().status === "offline") {
-      useSyncStore.setState({ status: "idle" });
-    }
-  };
+  const onOnline = () => run();
   const onOffline = () => useSyncStore.setState({ status: "offline" });
+  const onFocus = () => run();
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") run();
+  };
 
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibility);
+  const interval = setInterval(run, FOREGROUND_INTERVAL_MS);
   const unsubscribers: Array<() => void> = [];
-  void import("@/store/core/chatStore").then(({ useChatStore }) => {
+  void Promise.all([
+    import("@/store/core/chatStore"),
+    import("@/store/core/settingsStore"),
+    import("@/store/core/coreSettingsStore"),
+    import("@/store/core/knowledgeStore"),
+    import("@/store/core/memoryStore"),
+  ]).then(([chat, settings, core, knowledge, memory]) => {
     if (disposed) return;
-    let streaming = hasStreamingMessage(useChatStore.getState().activeMessages);
     unsubscribers.push(
-      useChatStore.subscribe((state) => {
-        const next = hasStreamingMessage(state.activeMessages);
-        if (next === streaming) return;
-        streaming = next;
-        // Another response started: wait for it to finish as well.
-        if (next) clearTimer();
-        else schedule();
-      }),
+      chat.useChatStore.subscribe(schedule),
+      settings.useSettingsStore.subscribe(schedule),
+      core.useCoreSettingsStore.subscribe(schedule),
+      knowledge.useKnowledgeStore.subscribe(schedule),
+      memory.useMemoryStore.subscribe(schedule),
     );
   });
 
+  const boot = () => queueMicrotask(run);
+  if (useSyncStore.persist.hasHydrated()) boot();
+  else unsubscribers.push(useSyncStore.persist.onFinishHydration(boot));
+
   stopActiveScheduler = () => {
     disposed = true;
-    clearTimer();
+    if (debounceTimer) clearTimeout(debounceTimer);
+    clearInterval(interval);
     window.removeEventListener("online", onOnline);
     window.removeEventListener("offline", onOffline);
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisibility);
     unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
     stopActiveScheduler = undefined;
   };

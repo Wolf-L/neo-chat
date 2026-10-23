@@ -1,11 +1,34 @@
+// Fork overlay: server side of the server-managed sync vault. Served from
+// `/api/sync/custom-preset` by the route `custom/apply.mjs` generates.
 import "server-only";
 
+import { NextResponse } from "next/server";
+import { z } from "zod";
 import { isAccessPasswordEnabled } from "@/lib/security/accessControl";
-import { parseRecoveryCode } from "./crypto";
-import { S3ProviderSchema } from "./remoteSchema";
-import type { SyncServerPreset } from "./types";
+import { parseRecoveryCode } from "@/lib/sync/crypto";
+import type { SyncServerPreset } from "./customPreset";
 
 const UNAVAILABLE: SyncServerPreset = { available: false };
+
+const S3ProviderSchema = z
+  .object({
+    kind: z.literal("s3"),
+    endpoint: z.string().url().max(2_048),
+    region: z.string().trim().min(1).max(100),
+    bucket: z.string().trim().min(1).max(255),
+    prefix: z
+      .string()
+      .max(2_048)
+      .refine(
+        (value) =>
+          !value.includes("\\") &&
+          value
+            .split("/")
+            .every((segment) => segment !== "." && segment !== ".."),
+      ),
+    forcePathStyle: z.boolean(),
+  })
+  .strict();
 
 function env(name: string): string {
   return process.env[name]?.trim() || "";
@@ -57,4 +80,10 @@ export async function getServerSyncPreset(): Promise<SyncServerPreset> {
     credentials: { kind: "s3", accessKeyId, secretAccessKey },
     recoveryCode,
   };
+}
+
+export async function GET() {
+  return NextResponse.json(await getServerSyncPreset(), {
+    headers: { "Cache-Control": "no-store" },
+  });
 }

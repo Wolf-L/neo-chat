@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncRemoteRequest, SyncRemoteResponse } from "@/lib/sync/types";
 
 const mocks = vi.hoisted(() => ({
@@ -16,10 +16,7 @@ vi.mock("@/lib/byok/client", () => ({
   encryptSecret: mocks.encryptSecret,
   fetchWithByokRetry: mocks.fetchWithByokRetry,
 }));
-vi.mock("@/lib/api/client", async (importOriginal) => ({
-  getResponseErrorMessage: (
-    await importOriginal<typeof import("@/lib/api/client")>()
-  ).getResponseErrorMessage,
+vi.mock("@/lib/api/client", () => ({
   readJsonResponseOrThrow: mocks.readJsonResponseOrThrow,
   signedApiFetch: mocks.signedApiFetch,
 }));
@@ -28,7 +25,6 @@ import {
   createSyncRemoteClient,
   SYNC_REMOTE_LIST_MAX_OBJECTS,
   SYNC_REMOTE_LIST_MAX_PAGES,
-  SYNC_REMOTE_MAX_ATTEMPTS,
 } from "@/lib/sync/remoteClient";
 import type { LocalEncryptedSecretEnvelope } from "@/lib/security/localSecrets";
 
@@ -131,89 +127,5 @@ describe("encrypted sync remote client pagination", () => {
       client.list("objects", controller.signal),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(requestCount).toBe(1);
-  });
-});
-
-describe("encrypted sync remote client errors", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.useFakeTimers();
-    mocks.decryptLocalSecret.mockResolvedValue(
-      JSON.stringify({ kind: "s3", accessKeyId: "key", secretAccessKey: "s" }),
-    );
-    mocks.encryptSecret.mockResolvedValue({ ciphertext: "encrypted" });
-    mocks.fetchWithByokRetry.mockImplementation(
-      async (request: () => Promise<unknown>) => request(),
-    );
-    mocks.readJsonResponseOrThrow.mockImplementation(
-      async (response: Response) => response.json(),
-    );
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const cpuLimitPage = () =>
-    new Response("<html>Worker exceeded resource limits</html>", {
-      status: 503,
-      headers: { "Content-Type": "text/html" },
-    });
-
-  it("retries transient platform failures", async () => {
-    mocks.signedApiFetch
-      .mockResolvedValueOnce(cpuLimitPage())
-      .mockResolvedValueOnce(Response.json({ ok: true, exists: false }));
-    const client = await createSyncRemoteClient(provider, credentialSecret);
-
-    const result = client.head("objects/a");
-    await vi.runAllTimersAsync();
-
-    await expect(result).resolves.toEqual({ ok: true, exists: false });
-    expect(mocks.signedApiFetch).toHaveBeenCalledTimes(2);
-    expect(mocks.encryptSecret).toHaveBeenCalledTimes(2);
-  });
-
-  it("gives up after the attempt budget with the HTTP status", async () => {
-    mocks.signedApiFetch.mockImplementation(async () => cpuLimitPage());
-    const client = await createSyncRemoteClient(provider, credentialSecret);
-
-    const result = client.put("objects/a", new Uint8Array([1]));
-    const assertion = expect(result).rejects.toThrow("HTTP 503");
-    await vi.runAllTimersAsync();
-
-    await assertion;
-    expect(mocks.signedApiFetch).toHaveBeenCalledTimes(
-      SYNC_REMOTE_MAX_ATTEMPTS,
-    );
-  });
-
-  it("surfaces proxy errors instead of treating them as data", async () => {
-    mocks.signedApiFetch.mockResolvedValue(
-      Response.json(
-        { error: "Remote put failed with HTTP 403." },
-        { status: 400 },
-      ),
-    );
-    const client = await createSyncRemoteClient(provider, credentialSecret);
-
-    await expect(client.put("objects/a", new Uint8Array([1]))).rejects.toThrow(
-      "Remote put failed with HTTP 403.",
-    );
-    expect(mocks.signedApiFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops retrying when the caller aborts", async () => {
-    const controller = new AbortController();
-    mocks.signedApiFetch.mockImplementation(async () => {
-      controller.abort();
-      return cpuLimitPage();
-    });
-    const client = await createSyncRemoteClient(provider, credentialSecret);
-
-    await expect(
-      client.head("objects/a", controller.signal),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(mocks.signedApiFetch).toHaveBeenCalledTimes(1);
   });
 });

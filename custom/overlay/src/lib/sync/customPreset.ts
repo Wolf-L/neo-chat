@@ -1,6 +1,25 @@
+// Fork overlay: client side of the server-managed sync vault.
 import { readJsonResponseOrThrow, signedApiFetch } from "@/lib/api/client";
+import type {
+  SyncProviderConfig,
+  SyncProviderCredentials,
+} from "@/lib/sync/types";
 import { useSyncStore } from "@/store/core/syncStore";
-import type { SyncServerPreset } from "./types";
+
+export const SYNC_PRESET_ENDPOINT = "/api/sync/custom-preset";
+
+/**
+ * Server-managed sync settings handed to signed-in clients so encrypted sync
+ * can be enabled without manual setup. Only offered behind an access password.
+ */
+export type SyncServerPreset =
+  | { available: false }
+  | {
+      available: true;
+      provider: Extract<SyncProviderConfig, { kind: "s3" }>;
+      credentials: Extract<SyncProviderCredentials, { kind: "s3" }>;
+      recoveryCode: string;
+    };
 
 export type SyncPresetResult = "applied" | "skipped" | "unavailable";
 
@@ -27,7 +46,7 @@ async function applyPreset(): Promise<SyncPresetResult> {
   await waitForSyncHydration();
   if (hasLocalSyncSetup()) return "skipped";
 
-  const response = await signedApiFetch("/api/sync/preset", {
+  const response = await signedApiFetch(SYNC_PRESET_ENDPOINT, {
     method: "GET",
     cache: "no-store",
   });
@@ -39,19 +58,17 @@ async function applyPreset(): Promise<SyncPresetResult> {
   if (!preset.available) return "unavailable";
   if (hasLocalSyncSetup()) return "skipped";
 
-  const store = useSyncStore.getState();
-  await store.configureProvider(preset.provider, preset.credentials);
-  await useSyncStore.getState().initializeVault(preset.recoveryCode);
-  void useSyncStore
+  await useSyncStore
     .getState()
-    .syncNow("preset")
-    .catch(() => undefined);
+    .configureProvider(preset.provider, preset.credentials);
+  await useSyncStore.getState().initializeVault(preset.recoveryCode);
   return "applied";
 }
 
 /**
  * Joins the deployment's server-managed sync vault on first sign-in. Devices
  * that already have a sync setup, including a disabled one, are left alone.
+ * The caller starts the first sync.
  */
 export function applyServerSyncPreset(): Promise<SyncPresetResult> {
   pending ??= applyPreset().finally(() => {
