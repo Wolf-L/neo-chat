@@ -1,0 +1,3 @@
+# Fork customization: keep this fork's response-triggered sync scheduler when
+# merging upstream (see .github/workflows/merge-upstream.yml).
+src/lib/sync/scheduler.ts merge=ours
